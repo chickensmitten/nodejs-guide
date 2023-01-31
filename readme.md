@@ -4,7 +4,7 @@
 - Introduction to MongoDB
 - Mongoose lessons
 - API for filtering data, sorting, limiting, pagination and aliasing
-- Proper error handling
+- Proper superior error handling
 - Authentication, authorization and security
 - Payments, email, file uploads
 
@@ -282,3 +282,65 @@ if (process.argv[2] === '--import') {
   deleteData();
 }
 ```
+## Debugging NodeJS
+- `npm install ndb --global` this may require `sudo`. Or install it locally with `npm install ndb --save-dev`
+- add `"debug": "ndb server.js"` to package.json
+- To get started, add breakpoint in a code line, click "next", click "step in", review code then click "step out".
+
+## Error Handling
+- Write a global error handling middleware after all the routers because this means none of the routers were able to catch the requests).
+- `app.all` is used to catch all the http methods.
+```
+app.all('*', (req, res, next) => {
+  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404)); // this is used to catch 404 errors
+});
+```
+- Create an error global class
+```
+// /utils/apperror.js
+class AppError extends Error {
+  constructor(message, statusCode) {
+    super(message);
+
+    this.statusCode = statusCode;
+    this.status = `${statusCode}`.startsWith('4') ? 'fail' : 'error';
+    this.isOperational = true; // check if this is an operational error and not programming error i.e. bug
+
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+module.exports = AppError;
+```
+- Any other operational error that is not 404 use this code `app.use(globalErrorHandler);` in app.js. It references `app((err, req, res, next) => {})` which express automatically knows this is an error handling middleware
+- `catchAsync()` replaces the `try catch` method, shown in code below. `.catch(next);` is as good as `.catch(err => next(err));` because `.catch` catches what comes after an operations when there is an error. Then the code continues down `app.js` until it hits `app.use(globalErrorHandler);` where the error is being handled.
+```
+module.exports = fn => {
+  return (req, res, next) => {
+    fn(req, res, next).catch(next);
+  };
+};
+```
+- `return (req, res, next) => {...}` is needed so that the functions within `fn(req, res, next).catch(next);` will be assigned to the method calling it i.e. `exports.createTour`
+- `if (error.name === 'CastError') error = handleCastErrorDB(error);` CastError is a mongoose specific error when ID not found
+- `if (error.code === 11000) error = handleDuplicateFieldsDB(error);` It is when trying to create new object in database when it already exists. It isn't a Mongoose error, but a MongoDB specific error.
+- `if (error.name === 'ValidationError')` is for invalid data type error from Mongoose.
+- to handle uncaught and unhandled errors that are no inside `app.js`
+```
+process.on('uncaughtException', err => {
+  console.log('UNCAUGHT EXCEPTION! 💥 Shutting down...');
+  console.log(err.name, err.message);
+  process.exit(1);
+});
+
+...
+
+process.on('unhandledRejection', err => {
+  console.log('UNHANDLED REJECTION! 💥 Shutting down...');
+  console.log(err.name, err.message);
+  server.close(() => {
+    process.exit(1);
+  });
+});
+```
+- `server.close` is used in unhandled rejection to allow the server to close gracefully
