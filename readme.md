@@ -1,4 +1,13 @@
-# Getting Started with NodeJS
+# Complete NodeJS, ExpressJS
+- Proper MVC file structure in ExpressJS
+- Middleware lessons
+- Introduction to MongoDB
+- Mongoose lessons
+- API for filtering data, sorting, limiting, pagination and aliasing
+- Proper error handling
+- Authentication, authorization and security
+- Payments, email, file uploads
+
 # Quick Intros
 - How to use node in the console. Run `node` in the terminal.
 - underscore gives you previous results in node terminal.
@@ -76,3 +85,31 @@ server.listen(8000, "127.0.0.1", () => {
 
 ```
 
+## Section 6, building express API
+**Using Postman**
+- Paste the URL
+- Select the right method
+- Input header (if any)
+- Input body (if any)
+
+**MVC**
+- File path: server.js -> app.js -> routes -> controllers
+
+**Middleware**
+- middleware is a pipeline. request-response cycle: incoming request -> middleware -> response
+- middleware is found in "app.js". It has `next` as shown in the following code. The code below shows `app.use` then do something, then run `next` to go to the next `app.use` code. Then finally, run the routes
+```
+app.use((req, res, next) => {
+  // do something 
+  next();
+});
+```
+- morgan is a popular logging middleware
+- when serving static files, there is no need to put `/public` path because if the process can't find the url, it will go to `/public` directly
+
+**ESLint + Prettier**
+- ESLint find code for errors and bad coding practices.
+- To install, run `npm i eslint prettier eslint-config-prettier eslint-plugin-prettier eslint-config-airbnb eslint-plugin-node eslint-plugin-import eslint-plugin-jsx-ally eslint-plugin-react --save-dev`
+- the dependencies should be installed in dev in package.json
+- ".prettierrc" and ".eslintrc.json" is where the rules can be found.
+- 
