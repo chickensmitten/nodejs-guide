@@ -82,7 +82,6 @@ server.on("request", (req, res) => {
 server.listen(8000, "127.0.0.1", () => {
   console.log("Listening...");
 });
-
 ```
 
 ## Using Postman
@@ -104,6 +103,8 @@ server.listen(8000, "127.0.0.1", () => {
 > { price: 43 }
 ```
 - When an item is deleted, the response is 204 because there shouldn't be any content.
+- On the top right side, Postman can support environments. Then using double curly brackets "{{ <NameField> }}" to use the environment variables.
+- in tests, you can also set the environment variable with javascript code snippets `pm.environment.set("jwt", pm.response.json().token);`
 
 ## MVC
 - MVC
@@ -282,6 +283,7 @@ if (process.argv[2] === '--import') {
   deleteData();
 }
 ```
+
 ## Debugging NodeJS
 - `npm install ndb --global` this may require `sudo`. Or install it locally with `npm install ndb --save-dev`
 - add `"debug": "ndb server.js"` to package.json
@@ -344,3 +346,300 @@ process.on('unhandledRejection', err => {
 });
 ```
 - `server.close` is used in unhandled rejection to allow the server to close gracefully
+
+## Signing Up Users
+### Creating User
+- When creating a sign up user, be specific on the fields. 
+```
+// use this method to sign up users
+exports.signup = catchAsync(async (req, res, next) => {
+  const newUser = await User.create({
+    name: req.body.name,
+    email: req.body.email,
+    password: req.body.password,
+    passwordConfirm: req.body.passwordConfirm
+  });
+
+  createSendToken(newUser, 201, res);
+});
+
+// don't use this method
+const newUser = await User.create(req.body);
+
+```
+
+### Managing Password
+1. make sure password and password confirm are the same using validation
+```
+  passwordConfirm: {
+    type: String,
+    required: [true, 'Please confirm your password'],
+    validate: {
+      // This only works on CREATE and SAVE!!!
+      validator: function(el) {
+        return el === this.password;
+      },
+      message: 'Passwords are not the same!'
+    }
+  },
+```
+2. using bcrypt hash in pre save to hash the password before saving. Passwords can also be hashed in the front end with bcrypt
+```
+userSchema.pre('save', async function(next) {
+  // Only run this function if password was actually modified
+  if (!this.isModified('password')) return next();
+
+  // Hash the password with cost of 12
+  this.password = await bcrypt.hash(this.password, 12);
+
+  // Delete passwordConfirm field
+  this.passwordConfirm = undefined;
+  next();
+});
+```
+
+## How JWT tokens work
+- to install jwt `npm i jsonwebtoken`
+- JWT based Login process
+  1. User make a post request to server with email and password
+  2. Server check if user exists and that the password is correct. Then a unique JWT token is create using a secret that is stored in the server
+  3. Server will send the JWT back to the client to store as a cookie or in localstorage
+  4. To access protected route, the user sends the JWT along in the request
+  5. Once it hits the server, the server will check if JWT is valid by comparing the received JWT token with the regenerated  one to allow access
+  6. If it is right, the protected data will be sent to the client. If not, an error will be sent.
+- All JWT token transactions must happen over https
+- Code for JWT
+```
+const signToken = id => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN
+  });
+};
+
+const createSendToken = (user, statusCode, res) => {
+  const token = signToken(user._id);
+  const cookieOptions = {
+    expires: new Date(
+      Date.now() + process.env.JWT_COOKIE_EXPIRES_IN * 24 * 60 * 60 * 1000
+    ),
+    httpOnly: true
+  };
+  if (process.env.NODE_ENV === 'production') cookieOptions.secure = true;
+
+  res.cookie('jwt', token, cookieOptions);
+
+  // Remove password from output
+  user.password = undefined;
+
+  res.status(statusCode).json({
+    status: 'success',
+    token,
+    data: {
+      user
+    }
+  });
+};
+```
+- Can use "jwt.io" as a debugger
+- this code `if (process.env.NODE_ENV === 'production') cookieOptions.secure = true;` only allow the cookie to be sent through https
+
+## Login
+- when logging in, the code must add `.select('+password');` in `const user = await User.findOne({ email }).select('+password');` because in userModel, the user's password field is `select: false` to avoid getAllUsers from returning with password, even though it is encrypted.
+```
+// in user controller
+if (!user || !(await user.correctPassword(password, user.password))) {
+  return next(new AppError('Incorrect email or password', 401));
+}
+
+// in user model
+userSchema.methods.correctPassword = async function(
+  candidatePassword,
+  userPassword
+) {
+  return await bcrypt.compare(candidatePassword, userPassword);
+};
+```
+
+## Access with protected routes
+- use `.protect` in `.get(authController.protect, tourController.getAllTours)`
+- add protects exports `exports.protect = catchAsync(async (req, res, next) => {}`
+- Example code implementation to access protected routes
+```
+exports.protect = catchAsync(async (req, res, next) => {
+  // 1) Getting token and check of it's there
+  let token;
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return next(
+      new AppError('You are not logged in! Please log in to get access.', 401)
+    );
+  }
+
+  // 2) Verification token
+  const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
+
+  // 3) Check if user still exists
+  const currentUser = await User.findById(decoded.id);
+  if (!currentUser) {
+    return next(
+      new AppError(
+        'The user belonging to this token does no longer exist.',
+        401
+      )
+    );
+  }
+
+  // 4) Check if user changed password after the token was issued
+  if (currentUser.changedPasswordAfter(decoded.iat)) {
+    return next(
+      new AppError('User recently changed password! Please log in again.', 401)
+    );
+  }
+
+  // GRANT ACCESS TO PROTECTED ROUTE
+  req.user = currentUser;
+  next();
+});
+```
+
+## Authorization and Permissions
+- can use the code below in routes to allow specific user roles to perform specific functions.
+```
+  .delete(
+    authController.protect,
+    authController.restrictTo('admin', 'lead-guide'),
+    tourController.deleteTour
+  );
+```
+- Use model add roles
+```
+role: {
+    type: String,
+    enum: ['user', 'guide', 'lead-guide', 'admin'],
+    default: 'user'
+  },
+```
+- in controller add the following code. 
+```
+exports.restrictTo = (...roles) => {
+  return (req, res, next) => {
+    // roles ['admin', 'lead-guide']. role='user'
+    if (!roles.includes(req.user.role)) {
+      return next(
+        new AppError('You do not have permission to perform this action', 403)
+      );
+    }
+
+    next();
+  };
+};
+
+```
+
+## Password reset function
+- refer to `exports.forgotPassword` and `exports.resetPassword` in controller and `userSchema.methods.createPasswordResetToken` in model
+- When creating password reset function, use `.save()` and not `.FindByIdAndUpdate`, because validation only runs with save
+- refer to `exports.updatePassword` for update password.
+
+## Sending email
+- to send email, use `npm i nodemailer`
+- then use "mailtrap" to create SMTP for dev to collect email
+```
+// /utils/email.js
+const nodemailer = require('nodemailer');
+
+const sendEmail = async options => {
+  // 1) Create a transporter
+  const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: process.env.EMAIL_PORT,
+    auth: {
+      user: process.env.EMAIL_USERNAME,
+      pass: process.env.EMAIL_PASSWORD
+    }
+  });
+
+  // 2) Define the email options
+  const mailOptions = {
+    from: 'Jonas Schmedtmann <hello@jonas.io>',
+    to: options.email,
+    subject: options.subject,
+    text: options.message
+    // html:
+  };
+
+  // 3) Actually send the email
+  await transporter.sendMail(mailOptions);
+};
+
+module.exports = sendEmail;
+
+```
+
+## Security Best Practices
+- COMPROMISED DATABASE
+  - Strongly encrypt passwords with salt and hash (bcrypt)
+  - Strongly encrypt password reset tokens (SHA 256)
+- NOSQL QUERY INJECTION
+  - Use mongoose for MongoDB (because of SchemaTypes) 
+  - Sanitize user input data
+- BRUTE FORCE ATTACKS
+  - Use bcrypt (to make login requests slow)
+  - Implement rate limiting (express-rate-limit)
+  - Implement maximum login attempts
+- CROSS-SITE SCRIPTING (XSS) ATTACKS
+  - Store JWT in HTTPOnly cookies
+  - Sanitize user input data
+  - Set special HTTP headers (helmet package)
+- DENIAL-OF-SERVICE (DOS) ATTACK
+  - Implement rate limiting (express-rate-limit) 
+  - Limit body payload (in body-parser)
+  - Avoid evil regular expressions
+- OTHER BEST PRACTICES AND SUGGESTIONS
+  - Always use HTTPS
+  - Create random password reset tokens with expiry dates 
+  - Deny access to JWT after password change
+  - Don’t commit sensitive config data to Git
+  - Don’t send error details to clients
+  - Prevent Cross-Site Request Forgery (csurf package) 
+  - Require re-authentication before a high-value action 
+  - Implement a blacklist of untrusted JWT
+  - Confirm user email address after first creating account 
+  - Keep user logged in with refresh tokens
+  - Implement two-factor authentication
+  - Prevent parameter pollution causing Uncaught Exceptions
+- install `npm i express-rate-limit` to rate limit requests
+```
+const limiter = rateLimit({
+  max: 100,
+  windowMs: 60 * 60 * 1000,
+  message: 'Too many requests from this IP, please try again in an hour!'
+});
+app.use('/api', limiter);
+```
+- to limit `req.body` size `app.use(express.json({ limit: '10kb' }));`
+- use `npm i helmet` for `app.use(helmet());` to set security headers
+- use `npm i express-mongo-sanitize` to sanitize data against SQL injections. `app.use(mongoSanitize());`
+- use `npm i xss-clean` to clean malicious html code `app.use(xss());`
+- to prevent parameter pollution, `npm i hpp`
+```
+// the whitelist allows for duplicate methods.
+app.use(
+  hpp({
+    whitelist: [
+      'duration',
+      'ratingsQuantity',
+      'ratingsAverage',
+      'maxGroupSize',
+      'difficulty',
+      'price'
+    ]
+  })
+);
+```
