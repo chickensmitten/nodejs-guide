@@ -105,6 +105,7 @@ server.listen(8000, "127.0.0.1", () => {
 - When an item is deleted, the response is 204 because there shouldn't be any content.
 - On the top right side, Postman can support environments. Then using double curly brackets "{{ <NameField> }}" to use the environment variables.
 - in tests, you can also set the environment variable with javascript code snippets `pm.environment.set("jwt", pm.response.json().token);`
+- Postman can do auto create documentation.
 
 ## MVC
 - MVC
@@ -283,6 +284,15 @@ if (process.argv[2] === '--import') {
   deleteData();
 }
 ```
+- Virtual Populate with Mongoose. Keeping a reference of all the child documents on the parents document without persisting that information on the database. When reviews are called, the tour information will be pulled along as well.
+```
+// Virtual populate
+tourSchema.virtual('reviews', {
+  ref: 'Review',
+  foreignField: 'tour',
+  localField: '_id'
+});
+```
 
 ## Debugging NodeJS
 - `npm install ndb --global` this may require `sudo`. Or install it locally with `npm install ndb --save-dev`
@@ -398,7 +408,7 @@ userSchema.pre('save', async function(next) {
 });
 ```
 
-## How JWT tokens work
+### How JWT tokens work
 - to install jwt `npm i jsonwebtoken`
 - JWT based Login process
   1. User make a post request to server with email and password
@@ -443,7 +453,7 @@ const createSendToken = (user, statusCode, res) => {
 - Can use "jwt.io" as a debugger
 - this code `if (process.env.NODE_ENV === 'production') cookieOptions.secure = true;` only allow the cookie to be sent through https
 
-## Login
+### Login
 - when logging in, the code must add `.select('+password');` in `const user = await User.findOne({ email }).select('+password');` because in userModel, the user's password field is `select: false` to avoid getAllUsers from returning with password, even though it is encrypted.
 ```
 // in user controller
@@ -458,6 +468,57 @@ userSchema.methods.correctPassword = async function(
 ) {
   return await bcrypt.compare(candidatePassword, userPassword);
 };
+```
+
+## Instance and Class/Static Methods
+- `userSchema.methods` aka instance method
+- `userSchema.static` aka static method or class method
+- example implementation with static
+```
+reviewSchema.statics.calcAverageRatings = async function(tourId) {
+  const stats = await this.aggregate([
+    {
+      $match: { tour: tourId }
+    },
+    {
+      $group: {
+        _id: '$tour',
+        nRating: { $sum: 1 },
+        avgRating: { $avg: '$rating' }
+      }
+    }
+  ]);
+  // console.log(stats);
+
+  if (stats.length > 0) {
+    await Tour.findByIdAndUpdate(tourId, {
+      ratingsQuantity: stats[0].nRating,
+      ratingsAverage: stats[0].avgRating
+    });
+  } else {
+    await Tour.findByIdAndUpdate(tourId, {
+      ratingsQuantity: 0,
+      ratingsAverage: 4.5
+    });
+  }
+};
+```
+
+## Gotcha for lifecycles (reviewSchema.pre and reviewSchema.post) with updating and deleting
+- Reengaging `calcAverageRatings` when updating or deleting is more difficult than creating, because `.save()` is not engaged. Use the code below to reengage it. Note that the review data is save to `this.r`
+```
+// findByIdAndUpdate
+// findByIdAndDelete
+reviewSchema.pre(/^findOneAnd/, async function(next) {
+  this.r = await this.findOne();
+  // console.log(this.r);
+  next();
+});
+
+reviewSchema.post(/^findOneAnd/, async function() {
+  // await this.findOne(); does NOT work here, query has already executed
+  await this.r.constructor.calcAverageRatings(this.r.tour);
+});
 ```
 
 ## Access with protected routes
@@ -643,3 +704,124 @@ app.use(
   })
 );
 ```
+
+## Data Modelling
+- Data can be referenced or embedded in MongoDB. Deciding on which one to use will depend on 
+  - relationship types: 1 to few is better for embedding. others are for referencing
+  - data accessing patterns: High read/write ratio use embedding. Else use referencing.
+  - data closeness: We use embedding, datasets belong to each other, like it is a subset of a set i.e. user + email. When we need to frequently query data on their own, we use referencing i.e. movies + images.
+- Referencing has the following:
+  - child referencing: A parent references a child. useful when there are few.
+  - parent referencing: Children references the parent. useful when there are many to tons of children.
+  - two-way referencing: child and parents referencing each other. for many to many relationships.
+- referencing in mongoose
+```
+  guides: [
+    {
+      type: mongoose.Schema.ObjectId,
+      ref: 'User'
+    }
+  ]
+```
+- embedding in mongoose
+```
+// tourModel
+guides: Array
+
+// then find the users by ID before saving and add it to the guides
+// tourSchema.pre('save', async function(next) {
+//   const guidesPromises = this.guides.map(async id => await User.findById(id));
+//   this.guides = await Promise.all(guidesPromises);
+//   next();
+// });
+```
+- use `Tour.findById(id).populate(path: "<name>". select: "<-__V -passwordChangedAt>")` to get the tour with the guides in JSON.
+- Or predefine it at model to execute it pre find
+```
+tourSchema.pre(/^find/, function(next) {
+  this.populate({
+    path: 'guides',
+    select: '-__v -passwordChangedAt'
+  });
+
+  next();
+});
+```
+
+## Nested Routes
+- When creating a nested route where the a review is being created, with this example URL "POST /tour/234fad4/reviews" . You will need to follow the this path: through the tour route, go to review route, merge the params, then create the review. Example implementation below
+  - create `router.use('/:tourId/reviews', reviewRouter);` in tourRoutes.js
+  - then in "reviewRoutes.js" add `const router = express.Router({ mergeParams: true });`
+  - then the params will be merged to this where the review is created.
+  ```
+  router
+  .route('/')
+  .get(reviewController.getAllReviews)
+  .post(
+    authController.restrictTo('user'),
+    reviewController.setTourUserIds,
+    reviewController.createReview
+  );
+  ```
+  - in controller allow:
+  ```
+  exports.setTourUserIds = (req, res, next) => {
+    // Allow nested routes
+    if (!req.body.tour) req.body.tour = req.params.tourId;
+    if (!req.body.user) req.body.user = req.user.id;
+    next();
+  };
+  ```
+
+## Indexes with MongoDB to improve read performance
+- index is best used by studying the access patterns then index according to the access patterns to improve the read performance.
+- `explain` in `const doc = await features.query.explain();` will provide a lot information about the query.
+- use `index` for indexing `tourSchema.index({ price: 1, ratingsAverage: -1 });`. this means that when searching for price or ratingsAverage, it will scan less documents with "totalDocsExamined" to return the targeted document "nReturned"
+
+## Geospatial queries
+- The code below help you find a tour near you
+  - first create routes `.route('/tours-within/:distance/center/:latlng/unit/:unit')` or the following methods
+  ```
+  // /tours-within?distance=233&center=-40,45&unit=mi
+  // /tours-within/233/center/-40,45/unit/mi
+  ```
+  - Then in controller, use the following codes. Note the `$geoWithin`
+  ```
+
+  ...
+  const tours = await Tour.find({
+    startLocation: { $geoWithin: { $centerSphere: [[lng, lat], radius] } }
+  });
+
+  // also can use $near instead of $geoWithin
+  ...
+
+  ```
+- Calculating distances
+  - using `$geoNear`. To use it, you will need `2dsphere` indexing.
+  - `$project` is used to only get `distance` and `name` from the tour object
+  ```
+  tourSchema.index({ startLocation: '2dsphere' });
+  ...
+
+    const distances = await Tour.aggregate([
+      {
+        $geoNear: {
+          near: {
+            type: 'Point',
+            coordinates: [lng * 1, lat * 1]
+          },
+          distanceField: 'distance',
+          distanceMultiplier: multiplier
+        }
+      },
+      {
+        $project: {
+          distance: 1,
+          name: 1
+        }
+      }
+    ]);
+  ...
+
+  ```
