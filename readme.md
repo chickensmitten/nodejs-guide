@@ -1062,6 +1062,37 @@ router.get(
   viewsController.getMyTours
 );
 ```
+- go to stripe -> developers -> webhooks -> add an endpoint, the endpoint will be `/webhook-checkout` with `checkout.session.completed` for stripe to send back the session data to this end point.
+  - then add the following code to app.js
+  ```
+  app.post(
+    '/webhook-checkout',
+    express.raw({ type: 'application/json' }),
+    bookingController.webhookCheckout
+  );
+  ```
+  - add code to bookingController.js
+  ```
+  exports.webhookCheckout = (req, res, next) => {
+    const signature = req.headers['stripe-signature'];
+
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      return res.status(400).send(`Webhook error: ${err.message}`);
+    }
+
+    if (event.type === 'checkout.session.completed')
+      createBookingCheckout(event.data.object);
+
+    res.status(200).json({ received: true });
+  };  
+  ```
 
 ## Deploying to Production Checklist
 - compress text with `npm i compression` and `app.use(compression());`. go to "giftofspeed.com" to test if GZIP is enabled.
@@ -1091,7 +1122,7 @@ process.on('SIGTERM', () => {
 });
 
 ```
-- implementing CORS, install `npm i CORS` then `app.use(cors());`. This allows everyone to consume our API. `// Access-Control-Allow-Origin *`
+- implementing CORS, install `npm i CORS` then `app.use(cors());`. This allows everyone like the console and postman or natours.com to api.antours.com to consume our API. `// Access-Control-Allow-Origin *`
 - However, use this to allow one URL
 ```
 api.natours.com, front-end natours.com
