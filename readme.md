@@ -825,3 +825,109 @@ tourSchema.pre(/^find/, function(next) {
   ...
 
   ```
+
+## Server side rendering Pug Template
+- Previously with ruby on rails, I have been using server side renderring, where the HTML, CSS and Javascript templates are built on the server side before being sent to the browser. The new modular approach for some time now has been to do client side renderring that consumes API from the server.
+- Setup Pug Template
+  - `npm i pug`
+  - To setup the pug template engine, do
+  ```
+  app.set('view engine', 'pug');
+  app.set('views', path.join(__dirname, 'views')); // path.join will auto correct for any slashes, cause sometimes, the paths does or doesn't have it
+  ```
+  - Create views folder
+  - then add "base.pug" into the views folder where we can add html templates
+  - then set routes in "app.js" with the following code:
+  ```
+  app.use('/', viewRouter);
+  router.get('/', authController.isLoggedIn, viewsController.getOverview);
+  ```
+- To pass data into pug template
+  - in controller create a code like this
+  ```
+  exports.getOverview = catchAsync(async (req, res, next) => {
+    // 1) Get tour data from collection
+    const tours = await Tour.find();
+
+    // 2) Build template
+    // 3) Render that template using tour data from 1)
+    res.status(200).render('overview', {
+      title: 'All Tours',
+      tours
+    });
+  });
+  ```
+  - then in pub template, call `each tour in tours` anywhere, then in the relevant place `span= tour.name`. In a string, use `#{title}` and `#{tours}` as normal
+- To add partial templates, use `include` in `include _header`
+- To extend a base template
+  - in base.png add `block content`, then in all the relevant pages like tour.pug or overview.pug, add the following code:
+  ```
+  // /views/overview.pug
+  extends base
+  block content
+  ...
+  ```
+  - then in routes and controller, do the following code to render overview.
+  ```
+  // routes
+  router.get('/', authController.isLoggedIn, viewsController.getOverview);
+
+  // overview controller
+  res.status(200).render('overview', {
+    title: 'All Tours',
+    tours
+  });  
+  ```
+- Use Mixin like a function in pug 
+  - Declare the mixin above the block
+  ```
+  mixin overviewBox(label, text, icon)
+  .overview-box__detail
+    svg.overview-box__icon
+      use(xlink:href=`/img/icons.svg#icon-${icon}`)
+    span.overview-box__label= label
+    span.overview-box__text= text
+  ```
+  - then use the mixin within the `block content` with `+overviewBox('Next date', date, 'calendar')`
+  - if else statement `- if (guide.role === 'lead-guide')`
+  - using javascript `- const parapraphs = tour.description.split('\n');`
+- adding more code to `head` block with the code below:
+```
+block append head
+  script(src='https://api.mapbox.com/mapbox-gl-js/v0.54.0/mapbox-gl.js')
+  link(href='https://api.mapbox.com/mapbox-gl-js/v0.54.0/mapbox-gl.css' rel='stylesheet')
+```
+
+## Adding map with MapBox
+  - first add the tour locations data to map class
+  ```
+  /views.tour.pug
+  section.section-map
+    #map(data-locations=`${JSON.stringify(tour.locations)}`)
+
+  / then add CDN
+  block append head
+    script(src='https://api.mapbox.com/mapbox-gl-js/v0.54.0/mapbox-gl.js')
+    link(href='https://api.mapbox.com/mapbox-gl-js/v0.54.0/mapbox-gl.css' rel='stylesheet')
+  ```
+  - then use Mapbox from mapbox.com by adding code to "/public/js/mapbox.js". Mapbo also has the npm method if using front end framework clients like NextJS
+
+## Login
+- use Axios to submit form
+- after user logs in, have to request cookie
+  - `npm i cookie-parser` 
+  - `app use(cookieParser())`
+  - then run `req.cookies` in authController, so that now we can verify the user based on authorization cookies and not just the header
+  ```
+  // 1) Getting token and check of it's there
+  let token;
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    token = req.headers.authorization.split(' ')[1];
+  } else if (req.cookies.jwt) {
+    token = req.cookies.jwt;
+  }
+  ```
+- by putting `user` into `res.locals.user = currentUser;` pug template will get access to them
