@@ -1062,3 +1062,9 @@ router.get(
   viewsController.getMyTours
 );
 ```
+
+## Deploying to Production
+- compress text with `npm i compression` and `app.use(compression());`
+- change all development URL to get URL from env or make it relative URL
+- compressing with `npm run build:js`
+- ignore all cache, env and node_module files from being uploaded to github
