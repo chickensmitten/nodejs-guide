@@ -772,6 +772,35 @@ tourSchema.pre(/^find/, function(next) {
     next();
   };
   ```
+- Another explanation for nested routes. get, update and delete all requires `:id`. 
+```
+router
+  .route('/:id')
+  .get(tourController.getTour)
+  .patch(
+    authController.protect,
+    authController.restrictTo('admin', 'lead-guide'),
+    tourController.uploadTourImages,
+    tourController.resizeTourImages,
+    tourController.updateTour
+  )
+  .delete(
+    authController.protect,
+    authController.restrictTo('admin', 'lead-guide'),
+    tourController.deleteTour
+  );
+```
+- If any of the methods are engaged, like `.get(tourController.getTour)`, and it has `res.status`, then it will exit. If not, it generally will continue with `next()`
+- More about `next()` in controller. When you see the following code:
+  ```
+  router.patch(
+    '/updateMe',
+    userController.uploadUserPhoto,
+    userController.resizeUserPhoto,
+    userController.updateMe
+  );
+  ```
+  `uploadUserPhoto` and `resizeUserPhoto` will have `next()` in the end, to denote that they will move to the next method until `updateMe` where is ends with a `res.status(200).json`
 
 ## Indexes with MongoDB to improve read performance
 - index is best used by studying the access patterns then index according to the access patterns to improve the read performance.
@@ -931,3 +960,105 @@ block append head
   }
   ```
 - by putting `user` into `res.locals.user = currentUser;` pug template will get access to them
+
+## Images upload, emails and payments
+
+### Upload One Image
+- To upload images, use `npm i multer`.
+  - Images are first uploaded to a directory in our file system
+  - Then in database, put a link to the image
+- Example code:
+```
+const multer = require('multer');
+
+const multerStorage = multer.memoryStorage(); // images are stored in memory, rather than in public
+
+const multerFilter = (req, file, cb) => {
+  if (file.mimetype.startsWith('image')) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Not an image! Please upload only images.', 400), false);
+  }
+};
+
+const upload = multer({
+  storage: multerStorage,
+  fileFilter: multerFilter
+});
+
+exports.uploadUserPhoto = upload.single('photo');
+```
+- Add code to `updateMe`
+```
+// 2) Filtered out unwanted fields names that are not allowed to be updated
+const filteredBody = filterObj(req.body, 'name', 'email');
+if (req.file) filteredBody.photo = req.file.filename;
+
+// 3) Update user document
+const updatedUser = await User.findByIdAndUpdate(req.user.id, filteredBody, {
+  new: true,
+  runValidators: true
+});
+```
+- Define a default user image in userModel
+```
+photo: {
+    type: String,
+    default: 'default.jpg'
+  },
+```
+- resize images with `npm i sharp`
+```
+  await sharp(req.file.buffer)
+    .resize(500, 500)
+    .toFormat('jpeg')
+    .jpeg({ quality: 90 })
+    .toFile(`public/img/users/${req.file.filename}`);
+```
+
+### Upload Multiple Images
+- most code same as upload one image, except for the controller
+```
+exports.uploadTourImages = upload.fields([
+  { name: 'imageCover', maxCount: 1 },
+  { name: 'images', maxCount: 3 }
+]);
+```
+- resize Images. `map` is used instead of `forEach` to save an array of all this promises with `await Promise.all`
+```
+  req.body.images = [];
+
+  await Promise.all(
+    req.files.images.map(async (file, i) => {
+      const filename = `tour-${req.params.id}-${Date.now()}-${i + 1}.jpeg`;
+
+      await sharp(file.buffer)
+        .resize(2000, 1333)
+        .toFormat('jpeg')
+        .jpeg({ quality: 90 })
+        .toFile(`public/img/tours/${filename}`);
+
+      req.body.images.push(filename);
+    })
+  );
+
+```
+
+## Email Handler Sending Email
+- configure email handler in "utils/email.js"
+- need to install `npm i htmlToText`
+- then use `await new Email(newUser, url).sendWelcome();` to send email
+- use mailsac.com to create disposable email
+
+## Stripe payment integration
+- backend integration, refer to bookingRoutes.js, bookingController.js
+- frontend integration, refer to tour.pug and stripe.js
+- when booking is paid, stripe requires a to return to a webhook, refer to 
+```
+router.get(
+  '/my-tours',
+  bookingController.createBookingCheckout,
+  authController.protect,
+  viewsController.getMyTours
+);
+```
