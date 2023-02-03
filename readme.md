@@ -1063,8 +1063,44 @@ router.get(
 );
 ```
 
-## Deploying to Production
-- compress text with `npm i compression` and `app.use(compression());`
+## Deploying to Production Checklist
+- compress text with `npm i compression` and `app.use(compression());`. go to "giftofspeed.com" to test if GZIP is enabled.
 - change all development URL to get URL from env or make it relative URL
 - compressing with `npm run build:js`
+- check package.json files are configured as follows
+```
+"start": "node server.js",
+"dev": "nodemon server.js",
+"start:prod": "NODE_ENV=production nodemon server.js",
+"debug": "ndb server.js",
+"watch:js": "parcel watch ./public/js/index.js --out-dir ./public/js --out-file bundle.js",
+"build:js": "parcel build ./public/js/index.js --out-dir ./public/js --out-file bundle.js"
+```
 - ignore all cache, env and node_module files from being uploaded to github
+- follow heroku steps to deploy to heroku
+- go to heroku and configure the env variables
+- update the postman env variable at postman app in Mac
+- How to test for secure HTTPS in heroku `secure: req.secure || req.headers['x-forwarded-proto'] === 'https'` then in app.js `app.enable('trust proxy');`
+- respond to heroku SIGTERM as the dyno restarts every 24 hours. It wouldn't be ideal for our app because it might disrupt our requests. Add this in server.js to shut down our server gracefully. `process.exit(1)` is not needed to be executed because SIGTERM shuts down our server anyways.
+```
+process.on('SIGTERM', () => {
+  console.log('👋 SIGTERM RECEIVED. Shutting down gracefully');
+  server.close(() => {
+    console.log('💥 Process terminated!');
+  });
+});
+
+```
+- implementing CORS, install `npm i CORS` then `app.use(cors());`. This allows everyone to consume our API. `// Access-Control-Allow-Origin *`
+- However, use this to allow one URL
+```
+api.natours.com, front-end natours.com
+app.use(cors({
+  origin: 'https://www.natours.com'
+}))
+```
+- Allows complex requests like patch and delete on CORS
+```
+app.options('*', cors());
+// app.options('/api/v1/tours/:id', cors());
+```
